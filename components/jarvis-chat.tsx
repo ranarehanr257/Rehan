@@ -2,7 +2,7 @@
 
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
-import { ArrowUp, Square } from 'lucide-react'
+import { ArrowUp, Mic, MicOff, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { ChatMessage } from '@/components/chat-message'
 import { Button } from '@/components/ui/button'
@@ -19,6 +19,9 @@ export function JarvisChat() {
     transport: new DefaultChatTransport({ api: '/api/chat' }),
   })
   const [input, setInput] = useState('')
+  const [isListening, setIsListening] = useState(false)
+  const [voiceError, setVoiceError] = useState<string | null>(null)
+  const recognitionRef = useRef<{ start: () => void; stop: () => void } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const isBusy = status === 'submitted' || status === 'streaming'
@@ -33,6 +36,58 @@ export function JarvisChat() {
     if (!value || isBusy) return
     sendMessage({ text: value })
     setInput('')
+  }
+
+  function toggleListening() {
+    if (isListening) {
+      recognitionRef.current?.stop()
+      return
+    }
+
+    type Recognition = {
+      lang: string
+      interimResults: boolean
+      continuous: boolean
+      onstart: (() => void) | null
+      onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
+      onerror: (() => void) | null
+      onend: (() => void) | null
+      start: () => void
+      stop: () => void
+    }
+    type RecognitionConstructor = new () => Recognition
+    const browserWindow = window as typeof window & {
+      SpeechRecognition?: RecognitionConstructor
+      webkitSpeechRecognition?: RecognitionConstructor
+    }
+    const SpeechRecognition = browserWindow.SpeechRecognition ?? browserWindow.webkitSpeechRecognition
+
+    if (!SpeechRecognition) {
+      setVoiceError('Voice input is not supported in this browser.')
+      return
+    }
+
+    setVoiceError(null)
+    const recognition = new SpeechRecognition()
+    recognition.lang = navigator.language || 'en-US'
+    recognition.interimResults = false
+    recognition.continuous = false
+    recognition.onstart = () => setIsListening(true)
+    recognition.onresult = (event) => {
+      const transcript = event.results[0]?.[0]?.transcript ?? ''
+      setInput(transcript)
+      submit(transcript)
+    }
+    recognition.onerror = () => {
+      setIsListening(false)
+      setVoiceError('I could not hear that, Sir. Please try again.')
+    }
+    recognition.onend = () => {
+      setIsListening(false)
+      recognitionRef.current = null
+    }
+    recognitionRef.current = recognition
+    recognition.start()
   }
 
   return (
@@ -86,6 +141,18 @@ export function JarvisChat() {
               aria-label="Message Jarvis"
               className="max-h-40 flex-1 resize-none bg-transparent px-2 py-2 text-[0.95rem] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
             />
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={toggleListening}
+              disabled={isBusy}
+              aria-label={isListening ? 'Stop voice input' : 'Start voice input'}
+              aria-pressed={isListening}
+              className={`size-9 shrink-0 rounded-xl ${isListening ? 'bg-primary/15 text-primary' : ''}`}
+            >
+              {isListening ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+            </Button>
             {isBusy ? (
               <Button
                 type="button"
@@ -109,6 +176,7 @@ export function JarvisChat() {
               </Button>
             )}
           </div>
+          {voiceError && <p className="mt-2 text-center text-xs text-destructive">{voiceError}</p>}
           <p className="mt-2 text-center text-xs text-muted-foreground">
             Jarvis searches the web live and cites its sources. Verify anything critical.
           </p>
