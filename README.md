@@ -1,2 +1,3 @@
 # Rehan
 Want to make ai jarvis personal assistant 
+“Add a voice input feature to my existing app. Add a microphone button in the chat UI. When the user taps it, record their voice, convert speech to text, send that text through the existing AI chat system, and display the AI's response normally in the chat. Do not change or break the existing UI or features. Use the existing APIs/services in the project where possible.”
