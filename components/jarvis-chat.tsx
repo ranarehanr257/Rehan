@@ -2,7 +2,7 @@
 
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
-import { ArrowUp, Mic, MicOff, Square } from 'lucide-react'
+import { ArrowUp, Mic, MicOff, Square, Trash2, Volume2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { ChatMessage } from '@/components/chat-message'
 import { Button } from '@/components/ui/button'
@@ -21,7 +21,12 @@ export function JarvisChat() {
   const [input, setInput] = useState('')
   const [isListening, setIsListening] = useState(false)
   const [voiceError, setVoiceError] = useState<string | null>(null)
+  const [recording, setRecording] = useState(false)
+  const [voiceFile, setVoiceFile] = useState<File | null>(null)
+  const [voicePreviewUrl, setVoicePreviewUrl] = useState<string | null>(null)
   const recognitionRef = useRef<{ start: () => void; stop: () => void } | null>(null)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const voiceChunksRef = useRef<Blob[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const isBusy = status === 'submitted' || status === 'streaming'
@@ -31,11 +36,67 @@ export function JarvisChat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, status])
 
+  useEffect(() => {
+    return () => {
+      if (voicePreviewUrl) URL.revokeObjectURL(voicePreviewUrl)
+    }
+  }, [voicePreviewUrl])
+
   function submit(text: string) {
     const value = text.trim()
     if (!value || isBusy) return
     sendMessage({ text: value })
     setInput('')
+  }
+
+  function toggleRecording() {
+    if (recording) {
+      recorderRef.current?.stop()
+      return
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceError('Audio recording is not supported in this browser.')
+      return
+    }
+
+    setVoiceError(null)
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      const recorder = new MediaRecorder(stream)
+      voiceChunksRef.current = []
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) voiceChunksRef.current.push(event.data)
+      }
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop())
+        const blob = new Blob(voiceChunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+        const file = new File([blob], `jarvis-voice-${Date.now()}.webm`, { type: blob.type })
+        setVoiceFile(file)
+        setVoicePreviewUrl(URL.createObjectURL(blob))
+        setRecording(false)
+        recorderRef.current = null
+      }
+      recorder.start()
+      recorderRef.current = recorder
+      setRecording(true)
+    }).catch(() => setVoiceError('Microphone access was denied. Please allow it and try again.'))
+  }
+
+  function clearVoiceFile() {
+    setVoiceFile(null)
+    setVoicePreviewUrl(null)
+  }
+
+  async function sendVoiceFile() {
+    if (!voiceFile || isBusy) return
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(voiceFile)
+    })
+    sendMessage({ files: [{ type: 'file', mediaType: voiceFile.type, url: dataUrl, filename: voiceFile.name }] })
+    clearVoiceFile()
   }
 
   function toggleListening() {
@@ -121,6 +182,18 @@ export function JarvisChat() {
           }}
           className="mx-auto w-full max-w-3xl px-4 py-4"
         >
+          {voicePreviewUrl && voiceFile && (
+            <div className="mb-2 flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-2">
+              <Volume2 className="size-4 shrink-0 text-primary" aria-hidden="true" />
+              <audio className="h-8 min-w-0 flex-1" controls src={voicePreviewUrl} aria-label="Recorded voice message" />
+              <Button type="button" size="icon" variant="ghost" onClick={clearVoiceFile} aria-label="Remove recorded voice message" className="size-8 shrink-0 rounded-lg">
+                <Trash2 className="size-4" />
+              </Button>
+              <Button type="button" size="sm" onClick={sendVoiceFile} disabled={isBusy} className="shrink-0 rounded-lg">
+                Send voice
+              </Button>
+            </div>
+          )}
           <div className="flex items-end gap-2 rounded-2xl border border-border bg-card p-2 focus-within:border-primary/50">
             <textarea
               value={input}
@@ -141,6 +214,18 @@ export function JarvisChat() {
               aria-label="Message Jarvis"
               className="max-h-40 flex-1 resize-none bg-transparent px-2 py-2 text-[0.95rem] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
             />
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={toggleRecording}
+              disabled={isBusy || isListening}
+              aria-label={recording ? 'Stop recording voice message' : 'Record voice message'}
+              aria-pressed={recording}
+              className={`size-9 shrink-0 rounded-xl ${recording ? 'bg-destructive/15 text-destructive' : ''}`}
+            >
+              {recording ? <Square className="size-4" /> : <Volume2 className="size-4" />}
+            </Button>
             <Button
               type="button"
               size="icon"
